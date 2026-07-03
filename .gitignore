@@ -6,3 +6,4 @@ results.json
 *.safetensors
 *.bin
 .DS_Store
+quantbench.db
