@@ -69,7 +69,17 @@ def save_results(results: list[BenchmarkResult], path: str = "results.json"):
 
 
 if __name__ == "__main__":
-    results = run_benchmark("Qwen/Qwen2.5-0.5B-Instruct", "hellaswag", limit=20)
-    for r in results:
-        print(r)
-    save_results(results)
+    from storage import init_db, save_results, has_results
+
+    init_db()
+
+    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+    task = "hellaswag"
+
+    if has_results(model_id, task):
+        print(f"Already have results for {model_id} on {task}, skipping compute.")
+    else:
+        results = run_benchmark(model_id, task, limit=20)
+        for r in results:
+            print(r)
+        save_results(results)
