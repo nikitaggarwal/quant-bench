@@ -52,6 +52,41 @@ def run_benchmark(model_id: str, task: str, limit: int | None = 20, device: str 
         ))
     return output
 
+from detect_baseline import detect_baseline
+
+def run_comparison(quantized_model_id: str, task: str, limit: int | None = 20, device: str = "mps"):
+    """
+    Given a quantized model ID, detect its baseline and run the benchmark on both.
+    Returns (quantized_results, baseline_results, baseline_model_id).
+    """
+    from storage import has_results, save_results
+
+    baseline_id = detect_baseline(quantized_model_id)
+    if baseline_id is None:
+        print(f"Could not auto-detect a baseline for {quantized_model_id}. "
+              f"You'll need to provide one manually.")
+        return None, None, None
+
+    print(f"Detected baseline: {baseline_id}")
+
+    # Quantized model
+    if has_results(quantized_model_id, task):
+        print(f"Already have results for {quantized_model_id} on {task}, skipping compute.")
+        quantized_results = None
+    else:
+        quantized_results = run_benchmark(quantized_model_id, task, limit=limit, device=device)
+        save_results(quantized_results)
+
+    # Baseline model
+    if has_results(baseline_id, task):
+        print(f"Already have results for {baseline_id} on {task}, skipping compute.")
+        baseline_results = None
+    else:
+        baseline_results = run_benchmark(baseline_id, task, limit=limit, device=device)
+        save_results(baseline_results)
+
+    return quantized_results, baseline_results, baseline_id
+
 
 def save_results(results: list[BenchmarkResult], path: str = "results.json"):
     try:
@@ -69,17 +104,7 @@ def save_results(results: list[BenchmarkResult], path: str = "results.json"):
 
 
 if __name__ == "__main__":
-    from storage import init_db, save_results, has_results
-
+    from storage import init_db
     init_db()
 
-    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
-    task = "hellaswag"
-
-    if has_results(model_id, task):
-        print(f"Already have results for {model_id} on {task}, skipping compute.")
-    else:
-        results = run_benchmark(model_id, task, limit=20)
-        for r in results:
-            print(r)
-        save_results(results)
+    run_comparison("Qwen/Qwen2.5-0.5B-Instruct", "hellaswag", limit=20)
