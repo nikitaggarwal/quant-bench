@@ -1,8 +1,17 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 import json
+import time
+
+import torch
+from transformers import BitsAndBytesConfig
 from lm_eval import simple_evaluate
 from lm_eval.models.huggingface import HFLM
+
+
+# Precisions that require a CUDA GPU (bitsandbytes has no CPU/MPS kernel).
+_CUDA_ONLY_PRECISIONS = {"int4", "int8"}
+_VALID_PRECISIONS = {"fp32", "fp16", "int8", "int4"}
 
 
 @dataclass
@@ -23,14 +32,110 @@ class BenchmarkResult:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
-def run_benchmark(model_id: str, task: str, limit: int | None = 20, device: str = "mps") -> list[BenchmarkResult]:
-    lm = HFLM(pretrained=model_id, dtype="float32", device=device)
-    results = simple_evaluate(model=lm, tasks=[task], limit=limit, num_fewshot=0)
+@dataclass
+class RunResult:
+    """
+    One evaluation run of a (model, benchmark, precision) triple.
+
+    Holds run-level facts (runtime, peak memory, device) once, plus the list of
+    per-metric BenchmarkResult rows the run produced (acc, acc_norm, ...). This
+    two-level shape maps directly onto the Postgres runs/metrics schema.
+    """
+    model_id: str
+    benchmark: str
+    precision: str
+    device: str
+    runtime_seconds: float
+    peak_memory_mb: float | None
+    n_shot: int
+    limit: int | None
+    source: str
+    metrics: list[BenchmarkResult] = field(default_factory=list)
+    timestamp: str = ""
+
+    def __post_init__(self):
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).isoformat()
+
+
+def _model_kwargs_for_precision(precision: str) -> dict:
+    """
+    Build the HFLM/from_pretrained kwargs for a given precision label.
+
+    HFLM forwards unknown kwargs straight to AutoModelForCausalLM.from_pretrained,
+    so passing `quantization_config` here is enough to load a bitsandbytes model.
+    """
+    if precision not in _VALID_PRECISIONS:
+        raise ValueError(
+            f"Unknown precision '{precision}'. Expected one of {sorted(_VALID_PRECISIONS)}."
+        )
+
+    if precision in _CUDA_ONLY_PRECISIONS and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"precision='{precision}' needs a CUDA GPU (bitsandbytes has no CPU/MPS "
+            f"kernel). Run this on Colab or a rented GPU, or use fp16/fp32 locally."
+        )
+
+    if precision == "fp32":
+        return {"dtype": "float32"}
+    if precision == "fp16":
+        return {"dtype": "float16"}
+    if precision == "int8":
+        return {
+            "dtype": "float16",
+            "quantization_config": BitsAndBytesConfig(load_in_8bit=True),
+        }
+    # int4 — nf4, matching the Colab run
+    return {
+        "dtype": "float16",
+        "quantization_config": BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        ),
+    }
+
+
+def _reset_peak_memory(device: str):
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+
+def _peak_memory_mb(device: str) -> float | None:
+    """Peak allocated memory in MB, or None if the backend can't report it."""
+    if device == "cuda" and torch.cuda.is_available():
+        return torch.cuda.max_memory_allocated() / (1024 * 1024)
+    if device == "mps" and torch.backends.mps.is_available():
+        # MPS has no peak counter; current allocation is the best proxy available.
+        return torch.mps.current_allocated_memory() / (1024 * 1024)
+    return None
+
+
+def run_benchmark(
+    model_id: str,
+    task: str,
+    precision: str = "fp32",
+    limit: int | None = 20,
+    device: str = "mps",
+    n_shot: int = 0,
+) -> RunResult:
+    # bitsandbytes precisions force CUDA; ignore whatever device was requested.
+    if precision in _CUDA_ONLY_PRECISIONS:
+        device = "cuda"
+
+    model_kwargs = _model_kwargs_for_precision(precision)
+    lm = HFLM(pretrained=model_id, device=device, **model_kwargs)
+
+    _reset_peak_memory(device)
+    start = time.perf_counter()
+    results = simple_evaluate(model=lm, tasks=[task], limit=limit, num_fewshot=n_shot)
+    runtime_seconds = time.perf_counter() - start
+    peak_memory_mb = _peak_memory_mb(device)
 
     task_results = results["results"][task]
     skip_keys = {"alias", "sample_len", "sample_len_stderr"}
 
-    output = []
+    metrics = []
     for key, value in task_results.items():
         if key in skip_keys or not isinstance(value, (int, float)):
             continue
@@ -40,24 +145,45 @@ def run_benchmark(model_id: str, task: str, limit: int | None = 20, device: str 
         if metric_name.endswith("_stderr"):
             continue  # skip for now — revisit once we decide how to display error bars
 
-        output.append(BenchmarkResult(
+        metrics.append(BenchmarkResult(
             model_id=model_id,
             benchmark=task,
             metric_name=metric_name,
             value=value,
-            precision="fp32",
+            precision=precision,
             source="computed",
-            n_shot=0,
+            n_shot=n_shot,
             limit=limit,
         ))
-    return output
+
+    return RunResult(
+        model_id=model_id,
+        benchmark=task,
+        precision=precision,
+        device=device,
+        runtime_seconds=runtime_seconds,
+        peak_memory_mb=peak_memory_mb,
+        n_shot=n_shot,
+        limit=limit,
+        source="computed",
+        metrics=metrics,
+    )
+
 
 from detect_baseline import detect_baseline
 
-def run_comparison(quantized_model_id: str, task: str, limit: int | None = 20, device: str = "mps"):
+
+def run_comparison(
+    quantized_model_id: str,
+    task: str,
+    precision: str = "int4",
+    baseline_precision: str = "fp16",
+    limit: int | None = 20,
+    device: str = "mps",
+):
     """
     Given a quantized model ID, detect its baseline and run the benchmark on both.
-    Returns (quantized_results, baseline_results, baseline_model_id).
+    Returns (quantized_run, baseline_run, baseline_model_id).
     """
     from storage import has_results, save_results
 
@@ -72,39 +198,52 @@ def run_comparison(quantized_model_id: str, task: str, limit: int | None = 20, d
     # Quantized model
     if has_results(quantized_model_id, task):
         print(f"Already have results for {quantized_model_id} on {task}, skipping compute.")
-        quantized_results = None
+        quantized_run = None
     else:
-        quantized_results = run_benchmark(quantized_model_id, task, limit=limit, device=device)
-        save_results(quantized_results)
+        quantized_run = run_benchmark(
+            quantized_model_id, task, precision=precision, limit=limit, device=device
+        )
+        save_results(quantized_run.metrics)
 
-    # Baseline model
+    # Baseline model (full precision)
     if has_results(baseline_id, task):
         print(f"Already have results for {baseline_id} on {task}, skipping compute.")
-        baseline_results = None
+        baseline_run = None
     else:
-        baseline_results = run_benchmark(baseline_id, task, limit=limit, device=device)
-        save_results(baseline_results)
+        baseline_run = run_benchmark(
+            baseline_id, task, precision=baseline_precision, limit=limit, device=device
+        )
+        save_results(baseline_run.metrics)
 
-    return quantized_results, baseline_results, baseline_id
+    return quantized_run, baseline_run, baseline_id
 
 
-def save_results(results: list[BenchmarkResult], path: str = "results.json"):
+def save_results_json(run: RunResult, path: str = "results.json"):
+    """Append a run (with its metrics) to a JSON file. Debug/inspection helper."""
     try:
         with open(path, "r") as f:
             existing = json.load(f)
     except FileNotFoundError:
         existing = []
 
-    existing.extend([asdict(r) for r in results])
+    existing.append(asdict(run))
 
     with open(path, "w") as f:
         json.dump(existing, f, indent=2)
 
-    print(f"Saved {len(results)} result(s) to {path}")
+    print(f"Saved run {run.model_id} [{run.precision}] to {path}")
 
 
 if __name__ == "__main__":
-    from storage import init_db
+    from storage import init_db, save_results
     init_db()
 
-    run_comparison("Qwen/Qwen2.5-0.5B-Instruct", "hellaswag", limit=20)
+    # fp16 baseline locally; int4 requires CUDA and will raise a clear error here.
+    run = run_benchmark("Qwen/Qwen2.5-0.5B-Instruct", "hellaswag", precision="fp16", limit=20)
+    save_results(run.metrics)
+    print(
+        f"{run.model_id} [{run.precision}] on {run.benchmark}: "
+        f"{run.runtime_seconds:.1f}s, peak {run.peak_memory_mb} MB"
+    )
+    for m in run.metrics:
+        print(f"  {m.metric_name}: {m.value}")
