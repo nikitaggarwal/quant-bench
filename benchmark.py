@@ -185,7 +185,7 @@ def run_comparison(
     Given a quantized model ID, detect its baseline and run the benchmark on both.
     Returns (quantized_run, baseline_run, baseline_model_id).
     """
-    from storage import has_results, save_results
+    from storage import has_results, save_run
 
     baseline_id = detect_baseline(quantized_model_id)
     if baseline_id is None:
@@ -203,7 +203,7 @@ def run_comparison(
         quantized_run = run_benchmark(
             quantized_model_id, task, precision=precision, limit=limit, device=device
         )
-        save_results(quantized_run.metrics)
+        save_run(quantized_run)
 
     # Baseline model (full precision)
     if has_results(baseline_id, task):
@@ -213,7 +213,7 @@ def run_comparison(
         baseline_run = run_benchmark(
             baseline_id, task, precision=baseline_precision, limit=limit, device=device
         )
-        save_results(baseline_run.metrics)
+        save_run(baseline_run)
 
     return quantized_run, baseline_run, baseline_id
 
@@ -235,12 +235,12 @@ def save_results_json(run: RunResult, path: str = "results.json"):
 
 
 if __name__ == "__main__":
-    from storage import init_db, save_results
+    from storage import init_db, save_run
     init_db()
 
     # fp16 baseline locally; int4 requires CUDA and will raise a clear error here.
     run = run_benchmark("Qwen/Qwen2.5-0.5B-Instruct", "hellaswag", precision="fp16", limit=20)
-    save_results(run.metrics)
+    save_run(run)
     print(
         f"{run.model_id} [{run.precision}] on {run.benchmark}: "
         f"{run.runtime_seconds:.1f}s, peak {run.peak_memory_mb} MB"
