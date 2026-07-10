@@ -12,7 +12,7 @@ import os
 
 import psycopg2
 
-from benchmark import RunResult
+from results import RunResult
 from metadata import model_meta, quant_meta
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "quant_bench_schema.sql")

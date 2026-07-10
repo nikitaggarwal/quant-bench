@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}quant-bench{% endblock %}</title>
+  <style>
+    :root { --fg:#1a1a1a; --muted:#666; --border:#e4e4e7; --bg:#fff;
+            --accent:#2b6cb0; --baseline-bg:#f6f8fa; --good:#2f855a; --bad:#c53030;
+            --pill-bg:#edf2f7; --pill-fg:#4a5568; }
+    @media (prefers-color-scheme: dark) {
+      :root { --fg:#e8e8e8; --muted:#9aa5b1; --border:#2f333a; --bg:#16181d;
+              --accent:#63b3ed; --baseline-bg:#20242c; --good:#68d391; --bad:#fc8181;
+              --pill-bg:#2d333b; --pill-fg:#adbac7; }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           color: var(--fg); background: var(--bg); margin: 0; line-height: 1.5; }
+    .wrap { max-width: 940px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
+    h3 { margin: 1.8rem 0 .3rem; }
+    .sub { color: var(--muted); margin: 0 0 1.5rem; }
+    .muted { color: var(--muted); font-size: .88rem; }
+    .back { font-size: .9rem; margin-bottom: .5rem; }
+    .table-scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem;
+            font-variant-numeric: tabular-nums; font-size: .95rem; }
+    th, td { padding: .55rem .7rem; text-align: right; border-bottom: 1px solid var(--border);
+             white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    thead th { border-bottom: 2px solid var(--border); font-size: .82rem; color: var(--muted);
+               font-weight: 600; }
+    tr.baseline { background: var(--baseline-bg); }
+    tr.baseline td:first-child { font-weight: 600; }
+    .good { color: var(--good); font-size: .85em; }
+    .bad  { color: var(--bad);  font-size: .85em; }
+    .pill { display:inline-block; padding:.05rem .5rem; border-radius:999px; font-size:.72rem;
+            background:var(--pill-bg); color:var(--pill-fg); margin-left:.35rem;
+            vertical-align:middle; }
+    .card { display:block; border:1px solid var(--border); border-radius:10px;
+            padding:.9rem 1.1rem; margin-bottom:.7rem; color:inherit; }
+    .card:hover { border-color: var(--accent); text-decoration:none; }
+    .card .name { font-weight:600; font-size:1.05rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">{% block body %}{% endblock %}</div>
+</body>
+</html>

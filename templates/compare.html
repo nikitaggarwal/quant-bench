@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ data.model }} · quant-bench{% endblock %}
+{% block body %}
+  <p class="back"><a href="{{ url_for('index') }}">&larr; all models</a></p>
+  <h1>{{ data.model }}</h1>
+  <p class="sub">{{ data.hf_repo }}</p>
+
+  {% for t in data.tasks %}
+    <h3>
+      {{ t.task }}
+      {% if t.eval_limit %}<span class="pill">{{ t.eval_limit }} examples</span>{% endif %}
+    </h3>
+    <p class="muted">Deltas shown relative to the {{ t.baseline_precision }} baseline.</p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>precision</th>
+            {% for mn in t.metric_names %}<th>{{ mn }}</th>{% endfor %}
+            <th>peak memory</th>
+            <th>runtime</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in t.runs %}
+            <tr class="{{ 'baseline' if r.is_baseline }}">
+              <td>
+                {{ r.precision }}
+                {% if r.is_baseline %}<span class="pill">baseline</span>{% endif %}
+              </td>
+
+              {% for mn in t.metric_names %}
+                <td>
+                  {% if r.metrics.get(mn) is not none %}
+                    {{ '%.4f' % r.metrics[mn] }}
+                    {% if not r.is_baseline and r.deltas.get(mn) is not none %}
+                      <span class="{{ 'bad' if r.deltas[mn] < 0 else 'good' }}">{{ '%+.4f' % r.deltas[mn] }}</span>
+                    {% endif %}
+                  {% else %}&mdash;{% endif %}
+                </td>
+              {% endfor %}
+
+              <td>
+                {% if r.peak_memory_mb is not none %}
+                  {{ '%.0f' % r.peak_memory_mb }} MB
+                  {% if not r.is_baseline and r.mem_pct_saved is not none %}
+                    <span class="{{ 'good' if r.mem_pct_saved > 0 else 'bad' }}">
+                      {{ '%+.0f' % (-r.mem_pct_saved) }}%</span>
+                  {% endif %}
+                {% else %}&mdash;{% endif %}
+              </td>
+
+              <td>
+                {% if r.runtime_seconds is not none %}
+                  {{ '%.1f' % r.runtime_seconds }}s
+                  {% if not r.is_baseline and r.speedup is not none %}
+                    <span class="{{ 'good' if r.speedup >= 1 else 'bad' }}">{{ '%.2f' % r.speedup }}&times;</span>
+                  {% endif %}
+                {% else %}&mdash;{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+{% endblock %}

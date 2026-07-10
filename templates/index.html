@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body %}
+  <h1>quant-bench</h1>
+  <p class="sub">Accuracy, memory, and speed of quantized models vs their full-precision baselines.</p>
+
+  {% if models %}
+    {% for m in models %}
+      <a class="card" href="{{ url_for('model_page', hf_repo=m.hf_repo) }}">
+        <div class="name">{{ m.model }}</div>
+        <div class="muted">{{ m.hf_repo }} &middot; {{ m.tasks | join(', ') }}</div>
+      </a>
+    {% endfor %}
+  {% else %}
+    <p class="muted">No results yet. Run a benchmark to populate the database, then refresh.</p>
+  {% endif %}
+{% endblock %}

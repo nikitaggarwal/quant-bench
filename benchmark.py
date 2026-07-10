@@ -1,5 +1,4 @@
-from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from dataclasses import asdict
 import json
 import time
 
@@ -8,54 +7,14 @@ from transformers import BitsAndBytesConfig
 from lm_eval import simple_evaluate
 from lm_eval.models.huggingface import HFLM
 
+# RunResult / BenchmarkResult live in results.py so the storage layer and web UI
+# can import them without pulling in this module's torch/transformers/lm_eval.
+from results import BenchmarkResult, RunResult
+
 
 # Precisions that require a CUDA GPU (bitsandbytes has no CPU/MPS kernel).
 _CUDA_ONLY_PRECISIONS = {"int4", "int8"}
 _VALID_PRECISIONS = {"fp32", "fp16", "int8", "int4"}
-
-
-@dataclass
-class BenchmarkResult:
-    model_id: str
-    benchmark: str
-    metric_name: str
-    value: float
-    precision: str
-    source: str
-    source_url: str | None = None
-    n_shot: int = 0
-    limit: int | None = None
-    timestamp: str = ""
-
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
-
-
-@dataclass
-class RunResult:
-    """
-    One evaluation run of a (model, benchmark, precision) triple.
-
-    Holds run-level facts (runtime, peak memory, device) once, plus the list of
-    per-metric BenchmarkResult rows the run produced (acc, acc_norm, ...). This
-    two-level shape maps directly onto the Postgres runs/metrics schema.
-    """
-    model_id: str
-    benchmark: str
-    precision: str
-    device: str
-    runtime_seconds: float
-    peak_memory_mb: float | None
-    n_shot: int
-    limit: int | None
-    source: str
-    metrics: list[BenchmarkResult] = field(default_factory=list)
-    timestamp: str = ""
-
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
 def _check_precision(precision: str):

@@ -1,0 +1,20 @@
+# Benchmark-runner dependencies (benchmark.py) — the full stack for RUNNING
+# evals on a GPU. Install this on the GPU box, NOT on the web host.
+#
+# Intended for a Linux CUDA GPU instance (e.g. an Exla A10). On Linux,
+# `pip install torch` pulls the CUDA build by default. bitsandbytes provides
+# the int4/int8 quantization and only runs on CUDA — that's why it's absent
+# from local macOS setups, and why the shrunk models can only run on a GPU.
+
+# torch: the CUDA build must match your GPU driver's CUDA version. Plain
+# `pip install torch` grabs the newest build (cu130), which needs a very recent
+# driver. On a CUDA 12.8 box (e.g. an A10 with driver 570.x), install the cu128
+# wheel explicitly instead:
+#   pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+torch>=2.11,<2.13
+transformers==5.12.1
+lm_eval==0.4.12
+accelerate==1.14.0        # required by transformers to load quantized models
+bitsandbytes>=0.43.0      # CUDA-only: int4 (nf4) and int8 quantization
+psycopg2-binary==2.9.12   # Postgres driver — saves results to Neon
+flask>=3.0                # web UI (app.py); to view results locally
