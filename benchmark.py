@@ -58,13 +58,8 @@ class RunResult:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
-def _model_kwargs_for_precision(precision: str) -> dict:
-    """
-    Build the HFLM/from_pretrained kwargs for a given precision label.
-
-    HFLM forwards unknown kwargs straight to AutoModelForCausalLM.from_pretrained,
-    so passing `quantization_config` here is enough to load a bitsandbytes model.
-    """
+def _check_precision(precision: str):
+    """Validate a precision label and that the current hardware can run it."""
     if precision not in _VALID_PRECISIONS:
         raise ValueError(
             f"Unknown precision '{precision}'. Expected one of {sorted(_VALID_PRECISIONS)}."
@@ -76,24 +71,45 @@ def _model_kwargs_for_precision(precision: str) -> dict:
             f"kernel). Run this on Colab or a rented GPU, or use fp16/fp32 locally."
         )
 
-    if precision == "fp32":
-        return {"dtype": "float32"}
-    if precision == "fp16":
-        return {"dtype": "float16"}
+
+def _bnb_config(precision: str) -> BitsAndBytesConfig:
+    """bitsandbytes quantization config for a quantized precision label."""
     if precision == "int8":
-        return {
-            "dtype": "float16",
-            "quantization_config": BitsAndBytesConfig(load_in_8bit=True),
-        }
+        return BitsAndBytesConfig(load_in_8bit=True)
     # int4 — nf4, matching the Colab run
-    return {
-        "dtype": "float16",
-        "quantization_config": BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-        ),
-    }
+    return BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+    )
+
+
+def _build_lm(model_id: str, precision: str, device: str) -> HFLM:
+    """
+    Build the lm-eval model wrapper for a (model, precision).
+
+    fp16/fp32 load straight through HFLM. For int4/int8 we build the quantized
+    model with transformers ourselves and hand the ready model to HFLM: HFLM
+    already passes its own quantization_config into the loader, so passing a
+    second one via kwargs collides ("multiple values for quantization_config").
+    """
+    _check_precision(precision)
+
+    if precision in ("fp32", "fp16"):
+        dtype = "float32" if precision == "fp32" else "float16"
+        return HFLM(pretrained=model_id, device=device, dtype=dtype)
+
+    # Quantized: load and quantize the model ourselves, then wrap it.
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=_bnb_config(precision),
+        dtype=torch.float16,
+        device_map={"": 0},  # place the whole model on GPU 0
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    return HFLM(pretrained=model, tokenizer=tokenizer, device=device)
 
 
 def _reset_peak_memory(device: str):
@@ -123,8 +139,7 @@ def run_benchmark(
     if precision in _CUDA_ONLY_PRECISIONS:
         device = "cuda"
 
-    model_kwargs = _model_kwargs_for_precision(precision)
-    lm = HFLM(pretrained=model_id, device=device, **model_kwargs)
+    lm = _build_lm(model_id, precision, device)
 
     _reset_peak_memory(device)
     start = time.perf_counter()
