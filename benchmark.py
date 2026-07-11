@@ -86,6 +86,16 @@ def _peak_memory_mb(device: str) -> float | None:
     return None
 
 
+def _hardware_name(device: str) -> str | None:
+    """The specific accelerator a run executed on (e.g. 'NVIDIA A10'), so runs
+    on different GPUs stay comparable. Runtime/memory are hardware-dependent."""
+    if device == "cuda" and torch.cuda.is_available():
+        return torch.cuda.get_device_name(0)
+    if device == "mps" and torch.backends.mps.is_available():
+        return "Apple Silicon (MPS)"
+    return None
+
+
 def run_benchmark(
     model_id: str,
     task: str,
@@ -107,7 +117,9 @@ def run_benchmark(
     peak_memory_mb = _peak_memory_mb(device)
 
     task_results = results["results"][task]
-    skip_keys = {"alias", "sample_len", "sample_len_stderr"}
+    # "alias"/"name" are labels; sample_len/sample_count are bookkeeping fields
+    # that appear on grouped tasks (e.g. mmlu) — none are real scores.
+    skip_keys = {"alias", "name", "sample_len", "sample_len_stderr", "sample_count"}
 
     metrics = []
     for key, value in task_results.items():
@@ -140,6 +152,7 @@ def run_benchmark(
         n_shot=n_shot,
         limit=limit,
         source="computed",
+        hardware=_hardware_name(device),
         metrics=metrics,
     )
 

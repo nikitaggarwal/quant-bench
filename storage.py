@@ -114,10 +114,12 @@ def _upsert_run(cur, run: RunResult, model_id: int, quant_id: int, task_id: int)
         cur.execute(
             """
             UPDATE runs
-            SET runtime_seconds = %s, peak_memory_mb = %s, device = %s, source = %s
+            SET runtime_seconds = %s, peak_memory_mb = %s, device = %s,
+                hardware = %s, source = %s
             WHERE id = %s
             """,
-            (run.runtime_seconds, run.peak_memory_mb, run.device, run.source, run_id),
+            (run.runtime_seconds, run.peak_memory_mb, run.device, run.hardware,
+             run.source, run_id),
         )
         return run_id
 
@@ -125,12 +127,12 @@ def _upsert_run(cur, run: RunResult, model_id: int, quant_id: int, task_id: int)
         """
         INSERT INTO runs
             (model_id, quant_method_id, task_id, runtime_seconds, peak_memory_mb,
-             device, n_shot, eval_limit, source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+             device, hardware, n_shot, eval_limit, source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (model_id, quant_id, task_id, run.runtime_seconds, run.peak_memory_mb,
-         run.device, run.n_shot, run.limit, run.source),
+         run.device, run.hardware, run.n_shot, run.limit, run.source),
     )
     return cur.fetchone()[0]
 

@@ -47,6 +47,7 @@ class RunResult:
     n_shot: int
     limit: int | None
     source: str
+    hardware: str | None = None   # GPU/accelerator name, e.g. "NVIDIA A10"
     metrics: list[BenchmarkResult] = field(default_factory=list)
     timestamp: str = ""
 
