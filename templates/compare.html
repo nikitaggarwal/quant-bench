@@ -1,68 +1,92 @@
 {% extends "base.html" %}
 {% block title %}{{ data.model }} · quant-bench{% endblock %}
+
+{%- macro fmt(value, kind) -%}
+  {%- if value is none -%}&mdash;
+  {%- elif kind == 'accuracy' -%}{{ '%.1f' % (value * 100) }}<span class="unit">%</span>
+  {%- else -%}{{ '%.2f' % value }}
+  {%- endif -%}
+{%- endmacro -%}
+
 {% block body %}
-  <p class="back"><a href="{{ url_for('index') }}">&larr; all models</a></p>
-  <h1>{{ data.model }}</h1>
-  <p class="sub">{{ data.hf_repo }}</p>
+  <a class="back" href="{{ url_for('index') }}">&larr; Leaderboard</a>
+  <div class="page-head">
+    <h1>{{ data.model }}</h1>
+    <p class="sub mono">{{ data.hf_repo }}</p>
+  </div>
 
   {% for t in data.tasks %}
-    <h3>
-      {{ t.task }}
-      {% if t.eval_limit %}<span class="pill">{{ t.eval_limit }} examples</span>{% endif %}
-    </h3>
-    <p class="muted">Deltas shown relative to the {{ t.baseline_precision }} baseline.</p>
+    <div class="task-block">
+      <div class="task-title">
+        <h2>{{ t.label }}</h2>
+        <span class="dirflag">
+          {% if t.lower_is_better %}&darr; lower is better{% else %}&uarr; higher is better{% endif %}
+        </span>
+        {% if t.eval_limit %}<span class="muted" style="font-size:.85rem">{{ t.eval_limit }} examples</span>{% endif %}
+      </div>
+      <p class="panel-meta" style="margin-bottom:.85rem">
+        <span>Deltas relative to the <strong>{{ t.baseline_precision }}</strong> baseline.</span>
+      </p>
 
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>precision</th>
-            {% for mn in t.metric_names %}<th>{{ mn }}</th>{% endfor %}
-            <th>peak memory</th>
-            <th>runtime</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in t.runs %}
-            <tr class="{{ 'baseline' if r.is_baseline }}">
-              <td>
-                {{ r.precision }}
-                {% if r.is_baseline %}<span class="pill">baseline</span>{% endif %}
-              </td>
+      <div class="table-card">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Precision</th>
+                {% for mn in t.metric_names %}<th class="col-primary">{{ mn }}</th>{% endfor %}
+                <th>Peak memory</th>
+                <th>Runtime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in t.runs %}
+                <tr class="{{ 'baseline' if r.is_baseline }}">
+                  <td>
+                    <span class="prec prec-{{ r.precision }}">{{ r.precision }}</span>
+                    {% if r.is_baseline %}<span class="tag">baseline</span>{% endif %}
+                  </td>
 
-              {% for mn in t.metric_names %}
-                <td>
-                  {% if r.metrics.get(mn) is not none %}
-                    {{ '%.4f' % r.metrics[mn] }}
-                    {% if not r.is_baseline and r.deltas.get(mn) is not none %}
-                      <span class="{{ 'bad' if r.deltas[mn] < 0 else 'good' }}">{{ '%+.4f' % r.deltas[mn] }}</span>
-                    {% endif %}
-                  {% else %}&mdash;{% endif %}
-                </td>
+                  {% for mn in t.metric_names %}
+                    <td class="score">
+                      {{ fmt(r.metrics.get(mn), t.value_kind) }}
+                      {% if not r.is_baseline and r.deltas.get(mn) is not none %}
+                        {# good when the change moves in the metric's preferred direction #}
+                        {% set is_good = (r.deltas[mn] > 0) != t.lower_is_better %}
+                        <span class="delta {{ 'good' if is_good else 'bad' }}">
+                          {%- if t.value_kind == 'accuracy' -%}{{ '%+.1f' % (r.deltas[mn] * 100) }}pt
+                          {%- else -%}{{ '%+.2f' % r.deltas[mn] }}{%- endif -%}
+                        </span>
+                      {% endif %}
+                    </td>
+                  {% endfor %}
+
+                  <td class="metric">
+                    {% if r.peak_memory_mb is not none %}
+                      {{ '%.0f' % r.peak_memory_mb }}<span class="unit"> MB</span>
+                      {% if not r.is_baseline and r.mem_pct_saved is not none %}
+                        <span class="delta {{ 'good' if r.mem_pct_saved > 0 else 'bad' }}">{{ '%+.0f' % (-r.mem_pct_saved) }}%</span>
+                      {% endif %}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+
+                  <td class="metric">
+                    {% if r.runtime_seconds is not none %}
+                      {{ '%.0f' % r.runtime_seconds }}<span class="unit"> s</span>
+                      {% if not r.is_baseline and r.speedup is not none %}
+                        <span class="delta {{ 'good' if r.speedup >= 1 else 'bad' }}">{{ '%.2f' % r.speedup }}&times;</span>
+                      {% endif %}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                </tr>
               {% endfor %}
-
-              <td>
-                {% if r.peak_memory_mb is not none %}
-                  {{ '%.0f' % r.peak_memory_mb }} MB
-                  {% if not r.is_baseline and r.mem_pct_saved is not none %}
-                    <span class="{{ 'good' if r.mem_pct_saved > 0 else 'bad' }}">
-                      {{ '%+.0f' % (-r.mem_pct_saved) }}%</span>
-                  {% endif %}
-                {% else %}&mdash;{% endif %}
-              </td>
-
-              <td>
-                {% if r.runtime_seconds is not none %}
-                  {{ '%.1f' % r.runtime_seconds }}s
-                  {% if not r.is_baseline and r.speedup is not none %}
-                    <span class="{{ 'good' if r.speedup >= 1 else 'bad' }}">{{ '%.2f' % r.speedup }}&times;</span>
-                  {% endif %}
-                {% else %}&mdash;{% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   {% endfor %}
+
+  <p class="footnote">Accuracy deltas are shown in percentage points (pt) versus the
+    baseline. Memory and runtime chips show the change from running at reduced precision.</p>
 {% endblock %}
