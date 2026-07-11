@@ -12,7 +12,8 @@
   <div class="page-head">
     <h1>Quantization leaderboard</h1>
     <p class="sub">How int8 and int4 versions of open LLMs stack up against their
-      full-precision (fp16) baselines &mdash; on accuracy, memory, and speed.</p>
+      full-precision (fp16) baselines &mdash; every benchmark at once, grouped by
+      model so you can see quantization degradation across the board.</p>
   </div>
 
   <!-- Request a model: styled placeholder; wiring lands in a later workstream. -->
@@ -27,137 +28,102 @@
     <button type="button" class="btn" disabled>Request</button>
   </div>
 
-  <!-- Task tabs -->
-  <div class="tabs" role="tablist" aria-label="Benchmark task">
-    {% for t in tasks %}
-      <button class="tab {{ 'is-active' if loop.first }}" role="tab"
-              data-panel="panel-{{ t.id }}" {{ 'disabled' if not t.available }}
-              aria-selected="{{ 'true' if loop.first else 'false' }}">
-        <span>{{ t.label }}</span>
-        {% if t.available %}
-          <span class="cnt">{{ t.rows|length }}</span>
-        {% else %}
-          <span class="lock">soon</span>
+  {% for m in data.models %}
+    <div class="model-section">
+      <div class="model-head">
+        <h2>{{ m.model }}</h2>
+        <a class="repo mono" href="{{ url_for('model_page', hf_repo=m.hf_repo) }}">{{ m.hf_repo }}</a>
+        <span class="spacer"></span>
+        {% if m.hardware %}
+          <span class="gpu"><span class="gpudot"></span>{{ m.hardware|join(', ') }}</span>
         {% endif %}
-      </button>
-    {% endfor %}
-  </div>
+      </div>
 
-  {% for t in tasks %}
-    <div class="panel {{ 'is-active' if loop.first }}" id="panel-{{ t.id }}"
-         role="tabpanel" aria-hidden="{{ 'false' if loop.first else 'true' }}">
-
-      {% if t.available %}
-        <div class="panel-meta">
-          <span><strong>{{ t.label }}</strong> &middot; {{ t.blurb }}</span>
-          <span class="dirflag">
-            {% if t.lower_is_better %}&darr; lower is better{% else %}&uarr; higher is better{% endif %}
-          </span>
-          <span>ranked by <code class="mono">{{ t.primary_metric }}</code></span>
-        </div>
-
-        <div class="table-card">
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Model</th>
-                  <th>Precision</th>
-                  {% for c in t.columns %}
-                    <th class="{{ 'col-primary' if c == t.primary_metric }}">
-                      {{ c }}{% if c == t.primary_metric %}<span class="caret">{{ '&#9650;'|safe if t.lower_is_better else '&#9660;'|safe }}</span>{% endif %}
-                    </th>
-                  {% endfor %}
-                  <th class="col-primary">Memory saved</th>
-                  <th>Peak mem</th>
-                  <th>Speed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for r in t.rows %}
-                  <tr class="{{ 'baseline' if r.is_baseline }}">
-                    <td class="rank">
-                      {% if r.rank <= 3 %}<span class="medal m{{ r.rank }}">{{ r.rank }}</span>
-                      {% else %}{{ r.rank }}{% endif %}
-                    </td>
-                    <td class="model">
-                      <div class="name">
-                        <a href="{{ url_for('model_page', hf_repo=r.hf_repo) }}">{{ r.model }}</a>
-                        {% if r.is_baseline %}<span class="tag">baseline</span>{% endif %}
-                      </div>
-                      <a class="repo mono" href="{{ url_for('model_page', hf_repo=r.hf_repo) }}">{{ r.hf_repo }}</a>
-                    </td>
-                    <td><span class="prec prec-{{ r.precision }}">{{ r.precision }}</span></td>
-                    {% for c in t.columns %}
-                      {% if c == t.primary_metric %}
-                        <td class="score" style="background: color-mix(in srgb, var(--heat-green) {{ (r.heat * 34)|round(1) }}%, transparent)">{{ fmt(r.metrics.get(c), t.value_kind) }}</td>
-                      {% else %}
-                        <td class="metric">{{ fmt(r.metrics.get(c), t.value_kind) }}</td>
-                      {% endif %}
-                    {% endfor %}
-                    <td class="improve">
-                      {% if r.is_baseline %}
-                        <div class="barcell"><span class="basepill">baseline</span></div>
-                      {% elif r.mem_pct_saved is not none %}
-                        <div class="barcell">
-                          <span class="bartrack"><span class="barfill" style="width: {{ [r.mem_pct_saved, 100]|min }}%"></span></span>
-                          <span class="barval"><span class="tri">&#9650;</span> {{ '%.0f' % r.mem_pct_saved }}%</span>
-                        </div>
-                      {% else %}<span class="muted">&mdash;</span>{% endif %}
-                    </td>
-                    <td class="metric">
-                      {% if r.peak_memory_mb is not none %}{{ '%.0f' % r.peak_memory_mb }}<span class="unit"> MB</span>{% else %}&mdash;{% endif %}
-                    </td>
-                    <td class="speed">
-                      {% if r.is_baseline or r.speedup is none %}
-                        {% if r.runtime_seconds is not none %}<span class="muted">1.00&times;</span><span class="subraw">{{ '%.0f' % r.runtime_seconds }}s</span>{% else %}&mdash;{% endif %}
-                      {% else %}
-                        <span class="chip {{ 'up' if r.speedup >= 1 else 'down' }}"><span class="tri">{{ '&#9650;'|safe if r.speedup >= 1 else '&#9660;'|safe }}</span> {{ '%.2f' % r.speedup }}&times;</span>
-                        <span class="subraw">{{ '%.0f' % r.runtime_seconds }}s</span>
-                      {% endif %}
-                    </td>
-                  </tr>
+      <div class="table-card">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Precision</th>
+                {% for t in data.tasks %}
+                  <th class="col-primary col-task" title="{{ t.blurb }}">
+                    {{ t.label }}<span class="caret">{{ '&#9650;'|safe if t.lower_is_better else '&#9660;'|safe }}</span>
+                    <span class="th-metric mono">{{ t.primary_metric }}</span>
+                  </th>
                 {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <p class="footnote">Each row is one model at one precision. Click a model to
-          see full fp16 &rarr; int8 &rarr; int4 deltas, memory saved, and speedup.</p>
+                <th class="col-primary">Memory saved</th>
+                <th>Peak mem</th>
+                <th>Speed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in m.rows %}
+                <tr class="{{ 'baseline' if r.is_baseline }}">
+                  <td>
+                    <span class="prec prec-{{ r.precision }}">{{ r.precision }}</span>
+                    {% if r.is_baseline and r.is_reported %}<span class="tag reported">reported</span>
+                    {% elif r.is_baseline %}<span class="tag">baseline</span>{% endif %}
+                  </td>
 
-      {% else %}
-        <div class="empty">
-          <h3>{{ t.label }} &mdash; coming soon</h3>
-          <p>{{ t.blurb }}
-            {% if t.lower_is_better %}<br>Results will be ranked with lower perplexity first.{% endif %}
-          </p>
+                  {% for t in data.tasks %}
+                    {% set c = r.cells[t.id] %}
+                    <td class="score"
+                        style="{% if c.heat is not none %}background: color-mix(in srgb, var(--heat-green) {{ (c.heat * 34)|round(1) }}%, transparent){% endif %}">
+                      <span class="valcell">
+                        <span class="v">{{ fmt(c.value, t.value_kind) }}</span>
+                        <span class="d">
+                          {% if c.delta is not none %}
+                            <span class="delta {{ 'good' if c.good else 'bad' }}">
+                              {%- if t.value_kind == 'accuracy' -%}{{ '%+.1f' % (c.delta * 100) }}pt
+                              {%- else -%}{{ '%+.2f' % c.delta }}{%- endif -%}
+                            </span>
+                          {% endif %}
+                        </span>
+                      </span>
+                    </td>
+                  {% endfor %}
+
+                  <td class="improve">
+                    {% if r.is_baseline %}
+                      <div class="barcell"><span class="basepill">baseline</span></div>
+                    {% elif r.mem_pct_saved is not none %}
+                      <div class="barcell">
+                        <span class="bartrack"><span class="barfill" style="width: {{ [r.mem_pct_saved, 100]|min }}%"></span></span>
+                        <span class="barval"><span class="tri">&#9650;</span> {{ '%.0f' % r.mem_pct_saved }}%</span>
+                      </div>
+                    {% else %}<span class="muted">&mdash;</span>{% endif %}
+                  </td>
+
+                  <td class="metric">
+                    {% if r.peak_memory_mb is not none %}{{ '%.0f' % r.peak_memory_mb }}<span class="unit"> MB</span>{% else %}&mdash;{% endif %}
+                  </td>
+
+                  <td class="speed">
+                    {% if r.is_baseline or r.speedup is none %}
+                      <span class="valcell spd"><span class="v muted">1.00&times;</span><span class="d"></span></span>
+                    {% else %}
+                      <span class="valcell spd">
+                        <span class="v"><span class="chip {{ 'up' if r.speedup >= 1 else 'down' }}"><span class="tri">{{ '&#9650;'|safe if r.speedup >= 1 else '&#9660;'|safe }}</span> {{ '%.2f' % r.speedup }}&times;</span></span>
+                        <span class="d"></span>
+                      </span>
+                    {% endif %}
+                    {% if r.runtime_seconds is not none %}<span class="subraw">{{ '%.0f' % r.runtime_seconds }}s total</span>{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
-      {% endif %}
+      </div>
     </div>
   {% endfor %}
 
-  {% if not tasks %}
+  <p class="footnote">Each row is one precision variant of the model above it; scores are
+    that variant on every benchmark, with the delta versus the model's fp16 baseline.
+    Memory saved and speed are versus that same baseline. Click a model&rsquo;s repo to
+    open its full fp16 &rarr; int8 &rarr; int4 comparison.</p>
+
+  {% if not data.models %}
     <div class="empty"><h3>No results yet</h3><p>Run a benchmark to populate the database.</p></div>
   {% endif %}
-
-  <script>
-    (function () {
-      var tabs = document.querySelectorAll('.tab[data-panel]');
-      tabs.forEach(function (tab) {
-        if (tab.disabled) return;
-        tab.addEventListener('click', function () {
-          document.querySelectorAll('.tab').forEach(function (t) {
-            t.classList.remove('is-active'); t.setAttribute('aria-selected', 'false');
-          });
-          document.querySelectorAll('.panel').forEach(function (p) {
-            p.classList.remove('is-active'); p.setAttribute('aria-hidden', 'true');
-          });
-          tab.classList.add('is-active'); tab.setAttribute('aria-selected', 'true');
-          var panel = document.getElementById(tab.dataset.panel);
-          if (panel) { panel.classList.add('is-active'); panel.setAttribute('aria-hidden', 'false'); }
-        });
-      });
-    })();
-  </script>
 {% endblock %}

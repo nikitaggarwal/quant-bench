@@ -92,117 +92,177 @@ def list_models() -> list[dict]:
     return sorted(models, key=lambda m: m["model"])
 
 
-def build_leaderboard() -> list[dict]:
+def build_model_groups() -> dict:
     """
-    One ranked table per task. Rows are model x precision entries (so the
-    leaderboard directly shows how int8/int4 stack up against fp16), ranked by
-    the task's primary metric with lower-is-better handled correctly.
+    The unified leaderboard, grouped by MODEL rather than split into per-task
+    tabs. Returns:
 
-    Every task in TASK_ORDER is returned; ones with no data yet come back with
-    available=False so the page can render a "coming soon" tab.
+        {
+          "tasks":  [ {id, label, blurb, lower_is_better, value_kind,
+                       primary_metric}, ... ]   # one column per benchmark
+          "models": [ {model, hf_repo, hardware, base_precision,
+                       rows: [ per-precision variant, ... ]}, ... ]
+        }
+
+    Each model section's rows are its precision variants (fp16 baseline first,
+    then int8/int4 and any other quant that shows up), and each row carries that
+    variant's primary-metric score for EVERY benchmark at once, plus memory
+    saved and speedup versus the model's own full-precision baseline. This lets
+    you eyeball quantization degradation across all benchmarks in a single row.
+
+    The green heatmap wash is normalised per benchmark across ALL runs (every
+    model + precision), so a cell's depth reflects where that value sits in the
+    benchmark's global range — with perplexity flipped (deeper green = lower).
     """
     all_rows = _fetch_all()
     tasks_with_data = {r["task"] for r in all_rows}
 
-    tasks_out = []
-    for task in TASK_ORDER:
-        meta = _task_meta(task)
-        primary = meta["primary_metric"]
-        available = task in tasks_with_data
+    # Column set: the registered tasks that actually have data, in declared order.
+    tasks = []
+    for tid in TASK_ORDER:
+        if tid in tasks_with_data:
+            m = _task_meta(tid)
+            tasks.append({
+                "id": tid, "label": m["label"], "blurb": m["blurb"],
+                "lower_is_better": m["lower_is_better"],
+                "value_kind": m["value_kind"], "primary_metric": m["primary_metric"],
+            })
 
-        rows_out, columns = [], []
-        if available:
-            trows = [r for r in all_rows if r["task"] == task]
+    # Prefer the largest sample size per (model, task) — most signal.
+    limit_of: dict[tuple, int] = {}
+    for r in all_rows:
+        if r["eval_limit"] is not None:
+            k = (r["hf_repo"], r["task"])
+            limit_of[k] = max(limit_of.get(k, 0), r["eval_limit"])
 
-            # Prefer the largest sample size per model (most signal).
-            repo_limit: dict[str, int] = {}
-            for r in trows:
-                if r["eval_limit"] is not None:
-                    repo_limit[r["hf_repo"]] = max(
-                        repo_limit.get(r["hf_repo"], 0), r["eval_limit"])
+    # Collapse metric rows into one run per (model, precision, task).
+    runs: dict[tuple, dict] = {}
+    for r in all_rows:
+        lim = limit_of.get((r["hf_repo"], r["task"]))
+        if lim is not None and r["eval_limit"] != lim:
+            continue
+        key = (r["hf_repo"], r["quant_method"], r["task"])
+        run = runs.setdefault(key, {
+            "hf_repo": r["hf_repo"], "model": r["model"],
+            "precision": r["quant_method"], "bits": r["bits"], "task": r["task"],
+            "peak_memory_mb": r["peak_memory_mb"],
+            "runtime_seconds": r["runtime_seconds"],
+            "hardware": r["hardware"], "source": r["source"], "metrics": {},
+        })
+        run["metrics"][r["metric_name"]] = r["value"]
 
-            # Collapse metric rows into one entry per (model, precision).
-            runs: dict[tuple, dict] = {}
-            for r in trows:
-                lim = repo_limit.get(r["hf_repo"])
-                if lim is not None and r["eval_limit"] != lim:
-                    continue
-                key = (r["hf_repo"], r["quant_method"])
-                run = runs.setdefault(key, {
-                    "model": r["model"], "hf_repo": r["hf_repo"],
-                    "precision": r["quant_method"], "bits": r["bits"],
-                    "peak_memory_mb": r["peak_memory_mb"],
-                    "runtime_seconds": r["runtime_seconds"],
-                    "metrics": {},
-                })
-                run["metrics"][r["metric_name"]] = r["value"]
+    # Global per-benchmark min/max on the primary metric -> heatmap range.
+    task_range: dict[str, tuple] = {}
+    for t in tasks:
+        vals = [run["metrics"].get(t["primary_metric"])
+                for run in runs.values() if run["task"] == t["id"]]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            task_range[t["id"]] = (min(vals), max(vals))
 
-            present = sorted({m for run in runs.values() for m in run["metrics"]})
-            # Primary metric first, remaining metric columns after it.
-            columns = ([primary] if primary in present else []) + \
-                      [m for m in present if m != primary]
-            rank_metric = primary if primary in present else (columns[0] if columns else None)
+    # Group runs by model.
+    by_model: dict[str, list] = defaultdict(list)
+    for run in runs.values():
+        by_model[run["hf_repo"]].append(run)
 
-            ranked = [run for run in runs.values()
-                      if rank_metric is not None and run["metrics"].get(rank_metric) is not None]
-            ranked.sort(key=lambda x: x["metrics"][rank_metric],
-                        reverse=not meta["lower_is_better"])
+    models_out = []
+    for hf_repo, mruns in by_model.items():
+        model_name = mruns[0]["model"]
+        hardware = sorted({r["hardware"] for r in mruns if r["hardware"]})
 
-            # Per-model full-precision baseline (fp16 preferred, else fp32), used
-            # to express each quantized row's memory/speed *improvement*.
-            baseline_of: dict[str, dict] = {}
-            for run in runs.values():
-                if run["precision"] in ("fp16", "fp32"):
-                    cur = baseline_of.get(run["hf_repo"])
-                    if cur is None or run["precision"] == "fp16":
-                        baseline_of[run["hf_repo"]] = run
+        # Runs of this model grouped by precision.
+        by_prec: dict[str, list] = defaultdict(list)
+        for run in mruns:
+            by_prec[run["precision"]].append(run)
 
-            # Heat = where this row's primary metric sits in the task's range,
-            # 0 (worst) -> 1 (best). Drives the green heatmap wash. Flip for
-            # lower-is-better metrics so "best" is always the deepest green.
-            vals = [run["metrics"][rank_metric] for run in ranked]
-            vmin, vmax = (min(vals), max(vals)) if vals else (0, 0)
-            span = vmax - vmin
+        def prec_bits(p: str):
+            b = next((r["bits"] for r in by_prec[p] if r["bits"] is not None), None)
+            return b if b is not None else -1
 
-            for i, run in enumerate(ranked, 1):
-                run["rank"] = i
-                run["primary_value"] = run["metrics"].get(rank_metric)
-                run["is_baseline"] = run["precision"] in ("fp16", "fp32")
+        # Baseline = fp16 if present, else fp32, else the highest-bit precision.
+        # (Robust to a "reported"/published baseline row that wasn't measured.)
+        if "fp16" in by_prec:
+            base_prec = "fp16"
+        elif "fp32" in by_prec:
+            base_prec = "fp32"
+        else:
+            base_prec = max(by_prec, key=prec_bits)
 
-                if span == 0:
-                    run["heat"] = 1.0
-                else:
-                    norm = (run["metrics"][rank_metric] - vmin) / span
-                    run["heat"] = (1 - norm) if meta["lower_is_better"] else norm
+        base_runs = by_prec[base_prec]
+        base_peak = max((r["peak_memory_mb"] for r in base_runs
+                         if r["peak_memory_mb"]), default=None)
+        base_rt_by_task = {r["task"]: r["runtime_seconds"] for r in base_runs}
+        base_by_task = {r["task"]: r for r in base_runs}
+        base_val = {t["id"]: (base_by_task[t["id"]]["metrics"].get(t["primary_metric"])
+                              if t["id"] in base_by_task else None)
+                    for t in tasks}
 
-                # Memory saved (%) and speedup vs this model's fp16 baseline.
-                base = baseline_of.get(run["hf_repo"])
-                run["mem_pct_saved"] = None
-                run["speedup"] = None
-                if base is not None and base is not run:
-                    if run["peak_memory_mb"] and base["peak_memory_mb"]:
-                        run["mem_pct_saved"] = (
-                            1 - run["peak_memory_mb"] / base["peak_memory_mb"]) * 100
-                    if run["runtime_seconds"] and base["runtime_seconds"]:
-                        run["speedup"] = base["runtime_seconds"] / run["runtime_seconds"]
-            rows_out = ranked
+        rows_out = []
+        for prec in sorted(by_prec, key=lambda p: PRECISION_ORDER.get(p, 99)):
+            pruns = by_prec[prec]
+            by_task = {r["task"]: r for r in pruns}
+            is_baseline = prec == base_prec
 
-        tasks_out.append({
-            "id": task,
-            "label": meta["label"],
-            "blurb": meta["blurb"],
-            "available": available,
-            "lower_is_better": meta["lower_is_better"],
-            "value_kind": meta["value_kind"],
-            "primary_metric": primary,
-            "columns": columns,
-            "rows": rows_out,
-            "model_count": len({r["hf_repo"] for r in rows_out}),
+            # One cell per benchmark: the variant's primary-metric value + heat.
+            cells = {}
+            for t in tasks:
+                run = by_task.get(t["id"])
+                val = run["metrics"].get(t["primary_metric"]) if run else None
+                heat = None
+                if val is not None and t["id"] in task_range:
+                    vmin, vmax = task_range[t["id"]]
+                    span = vmax - vmin
+                    if span == 0:
+                        heat = 1.0
+                    else:
+                        norm = (val - vmin) / span
+                        heat = (1 - norm) if t["lower_is_better"] else norm
+                # Degradation versus this model's own baseline on this benchmark.
+                delta = good = None
+                bv = base_val.get(t["id"])
+                if not is_baseline and val is not None and bv is not None:
+                    delta = val - bv
+                    good = (delta > 0) != t["lower_is_better"]
+                cells[t["id"]] = {"value": val, "heat": heat,
+                                  "delta": delta, "good": good}
+
+            # Peak memory = footprint ceiling across this variant's runs.
+            peak = max((r["peak_memory_mb"] for r in pruns
+                        if r["peak_memory_mb"]), default=None)
+            mem_pct_saved = None
+            if not is_baseline and peak and base_peak:
+                mem_pct_saved = (1 - peak / base_peak) * 100
+
+            # Speedup over shared tasks only, so the ratio is apples-to-apples.
+            speedup = None
+            if not is_baseline:
+                shared = [tk for tk, r in by_task.items()
+                          if r["runtime_seconds"] and base_rt_by_task.get(tk)]
+                if shared:
+                    vt = sum(by_task[tk]["runtime_seconds"] for tk in shared)
+                    bt = sum(base_rt_by_task[tk] for tk in shared)
+                    if vt:
+                        speedup = bt / vt
+
+            total_rt = sum(r["runtime_seconds"] for r in pruns
+                           if r["runtime_seconds"]) or None
+            src = pruns[0]["source"]
+            rows_out.append({
+                "precision": prec, "bits": prec_bits(prec),
+                "is_baseline": is_baseline,
+                "is_reported": bool(src and src != "computed"),
+                "source": src, "cells": cells,
+                "peak_memory_mb": peak, "mem_pct_saved": mem_pct_saved,
+                "speedup": speedup, "runtime_seconds": total_rt,
+            })
+
+        models_out.append({
+            "model": model_name, "hf_repo": hf_repo, "hardware": hardware,
+            "base_precision": base_prec, "rows": rows_out,
         })
 
-    # Available tasks first, otherwise keep declared order.
-    tasks_out.sort(key=lambda t: (not t["available"], TASK_ORDER.index(t["id"])))
-    return tasks_out
+    models_out.sort(key=lambda m: m["model"])
+    return {"tasks": tasks, "models": models_out}
 
 
 def build_comparison(hf_repo: str) -> dict | None:
@@ -292,7 +352,7 @@ def build_comparison(hf_repo: str) -> dict | None:
 
 @app.route("/")
 def index():
-    return render_template("index.html", tasks=build_leaderboard())
+    return render_template("index.html", data=build_model_groups())
 
 
 @app.route("/model/<path:hf_repo>")

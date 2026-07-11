@@ -271,6 +271,41 @@
     .subraw { display: block; font-size: .72rem; color: var(--faint);
               font-weight: 500; margin-top: .12rem; }
 
+    /* ---------- aligned value + delta cell ----------
+       Splits a cell into a right-aligned NUMBER slot and a fixed-width DELTA
+       slot, so the number sits on the same vertical line in a column whether or
+       not a delta chip / % / speedup accompanies it (a missing chip leaves the
+       slot empty instead of shifting the number). */
+    .valcell {
+      display: inline-grid; width: 100%;
+      grid-template-columns: 1fr var(--slot, 4rem);
+      align-items: baseline; column-gap: .4rem;
+    }
+    .valcell > .v { text-align: right; white-space: nowrap; }
+    .valcell > .d { text-align: left; white-space: nowrap; min-width: 0; }
+    .valcell.mem, .valcell.spd { --slot: 3.6rem; }
+
+    /* ---------- model section (unified leaderboard) ---------- */
+    .model-section { margin-top: 2.1rem; }
+    .model-section:first-of-type { margin-top: 1rem; }
+    .model-head { display: flex; align-items: baseline; gap: .55rem;
+                  flex-wrap: wrap; margin: 0 0 .7rem; }
+    .model-head h2 { margin: 0; font-size: 1.15rem; letter-spacing: -.02em;
+                     font-weight: 650; }
+    .model-head .repo { font-size: .8rem; color: var(--faint); }
+    .model-head .repo:hover { color: var(--accent); text-decoration: none; }
+    .model-head .spacer { flex: 1; }
+    .gpu {
+      display: inline-flex; align-items: center; gap: .32rem;
+      font-size: .72rem; font-weight: 600; padding: .16rem .5rem; border-radius: 6px;
+      background: var(--surface-2); border: 1px solid var(--border-2); color: var(--fg-soft);
+    }
+    .gpu .gpudot { width: .5rem; height: .5rem; border-radius: 999px; background: var(--accent); }
+    .tag.reported { background: var(--surface-2); color: var(--muted); }
+    th.col-task .caret { color: var(--faint); font-size: .7em; margin-left: .2rem; }
+    th.col-task .th-metric { display: block; font-size: .92em; font-weight: 600;
+                             color: var(--faint); text-transform: none; letter-spacing: 0; }
+
     /* empty / coming-soon state */
     .empty {
       border: 1px dashed var(--border-2); border-radius: 14px; background: var(--surface);

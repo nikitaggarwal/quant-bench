@@ -49,34 +49,42 @@
 
                   {% for mn in t.metric_names %}
                     <td class="score">
-                      {{ fmt(r.metrics.get(mn), t.value_kind) }}
-                      {% if not r.is_baseline and r.deltas.get(mn) is not none %}
-                        {# good when the change moves in the metric's preferred direction #}
-                        {% set is_good = (r.deltas[mn] > 0) != t.lower_is_better %}
-                        <span class="delta {{ 'good' if is_good else 'bad' }}">
-                          {%- if t.value_kind == 'accuracy' -%}{{ '%+.1f' % (r.deltas[mn] * 100) }}pt
-                          {%- else -%}{{ '%+.2f' % r.deltas[mn] }}{%- endif -%}
+                      <span class="valcell">
+                        <span class="v">{{ fmt(r.metrics.get(mn), t.value_kind) }}</span>
+                        <span class="d">
+                          {% if not r.is_baseline and r.deltas.get(mn) is not none %}
+                            {# good when the change moves in the metric's preferred direction #}
+                            {% set is_good = (r.deltas[mn] > 0) != t.lower_is_better %}
+                            <span class="delta {{ 'good' if is_good else 'bad' }}">
+                              {%- if t.value_kind == 'accuracy' -%}{{ '%+.1f' % (r.deltas[mn] * 100) }}pt
+                              {%- else -%}{{ '%+.2f' % r.deltas[mn] }}{%- endif -%}
+                            </span>
+                          {% endif %}
                         </span>
-                      {% endif %}
+                      </span>
                     </td>
                   {% endfor %}
 
                   <td class="metric">
-                    {% if r.peak_memory_mb is not none %}
-                      {{ '%.0f' % r.peak_memory_mb }}<span class="unit"> MB</span>
-                      {% if not r.is_baseline and r.mem_pct_saved is not none %}
-                        <span class="delta {{ 'good' if r.mem_pct_saved > 0 else 'bad' }}">{{ '%+.0f' % (-r.mem_pct_saved) }}%</span>
-                      {% endif %}
-                    {% else %}&mdash;{% endif %}
+                    <span class="valcell mem">
+                      <span class="v">{% if r.peak_memory_mb is not none %}{{ '%.0f' % r.peak_memory_mb }}<span class="unit"> MB</span>{% else %}&mdash;{% endif %}</span>
+                      <span class="d">
+                        {% if not r.is_baseline and r.mem_pct_saved is not none %}
+                          <span class="delta {{ 'good' if r.mem_pct_saved > 0 else 'bad' }}">{{ '%+.0f' % (-r.mem_pct_saved) }}%</span>
+                        {% endif %}
+                      </span>
+                    </span>
                   </td>
 
                   <td class="metric">
-                    {% if r.runtime_seconds is not none %}
-                      {{ '%.0f' % r.runtime_seconds }}<span class="unit"> s</span>
-                      {% if not r.is_baseline and r.speedup is not none %}
-                        <span class="delta {{ 'good' if r.speedup >= 1 else 'bad' }}">{{ '%.2f' % r.speedup }}&times;</span>
-                      {% endif %}
-                    {% else %}&mdash;{% endif %}
+                    <span class="valcell spd">
+                      <span class="v">{% if r.runtime_seconds is not none %}{{ '%.0f' % r.runtime_seconds }}<span class="unit"> s</span>{% else %}&mdash;{% endif %}</span>
+                      <span class="d">
+                        {% if not r.is_baseline and r.speedup is not none %}
+                          <span class="delta {{ 'good' if r.speedup >= 1 else 'bad' }}">{{ '%.2f' % r.speedup }}&times;</span>
+                        {% endif %}
+                      </span>
+                    </span>
                   </td>
                 </tr>
               {% endfor %}
