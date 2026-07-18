@@ -4,3 +4,4 @@
 # stack in requirements-bench.txt instead.
 flask>=3.0
 psycopg2-binary==2.9.12   # Postgres driver — reads results from Neon
+huggingface_hub>=0.24     # validate requested models (existence + size) at enqueue time

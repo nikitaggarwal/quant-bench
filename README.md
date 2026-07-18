@@ -32,9 +32,11 @@ Early development. Currently:
 - [x] Precision control (fp32 / fp16 / int8 / int4) with runtime + peak-memory tracking
 - [x] Auto-detect the full-precision baseline from a quantized model's metadata
 - [x] Persistent storage in Postgres (Neon), with lookup before recompute
-- [ ] Background job queue for long-running benchmark runs
+- [x] Web frontend — a leaderboard + per-model comparison pages (`app.py`)
+- [x] On-demand requests: visitors request a model, it's queued, and a GPU worker
+      benchmarks it and emails them a link (`bench_requests` queue + `worker.py`)
+- [ ] On-demand GPU (Modal) + SMS notifications (Phase 2)
 - [ ] API layer
-- [ ] Web frontend
 
 ## How quantization runs
 
@@ -91,6 +93,45 @@ Runs a benchmark and saves the results to Postgres. The two entry points:
 - `run_benchmark(model_id, task, precision=...)` — evaluate one model at one precision.
 - `run_comparison(quantized_model_id, task)` — detect the baseline, then benchmark both the
   quantized model and its full-precision baseline, skipping anything already stored.
+
+## Live benchmarking (on-demand requests)
+
+A visitor can request a model that isn't in the database yet. The web app can't run
+benchmarks itself (it's a serverless function with no GPU), so the request and the
+work are decoupled by a job queue in Postgres. See `docs/live-benchmarking-design.md`
+for the full design.
+
+The flow:
+
+1. Visitor submits a Hugging Face model id + email on the leaderboard page.
+2. `POST /request` (in `app.py`) checks whether we already have the results (if so it
+   just links there), then validates the model exists and is small enough
+   (`intake.py`), rate-limits, and drops a row on the `bench_requests` queue.
+3. `worker.py`, running on a GPU box, claims the job, benchmarks the model against its
+   baseline, saves the results, and emails the visitor a link (`notify.py`).
+4. The visitor's status page (`/request/<token>`) flips to "done" with a link.
+
+Run the worker on the GPU box (after installing `requirements-bench.txt`):
+
+```bash
+python3 worker.py     # polls the queue; Ctrl-C to stop
+```
+
+Requests submitted while the worker is off simply wait in the queue until it runs.
+
+### Environment variables
+
+Set these wherever each component runs (never commit them — `.env` is git-ignored):
+
+| Variable | Needed by | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | web + worker | Neon Postgres connection string (already required) |
+| `FLASK_SECRET_KEY` | web | signs flash messages; set a random value in production |
+| `RESEND_API_KEY` | worker | Resend key for sending result emails (unset = emails are skipped/logged) |
+| `RESEND_FROM` | worker | verified sender, e.g. `quant-bench <bench@yourdomain.com>` |
+| `PUBLIC_BASE_URL` | worker | site root for building links, e.g. `https://quant-bench.vercel.app` |
+| `HF_TOKEN` | web + worker | optional; only needed to validate/run gated models |
+| `BENCH_LIMIT` | worker | optional; cap eval examples per task for cheaper test runs (unset = full) |
 
 ## Stack
 

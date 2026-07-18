@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Request status · quant-bench{% endblock %}
+
+{% block body %}
+  {# While the job is still moving, refresh every 10s so the visitor sees it flip
+     to "done" without reloading by hand. (They're also emailed on finish.) #}
+  {% if req.status in ('pending', 'running') %}
+    <meta http-equiv="refresh" content="10">
+  {% endif %}
+
+  <a class="back" href="{{ url_for('index') }}">&larr; Leaderboard</a>
+
+  <div class="status-card">
+    {% set s = req.status %}
+    <span class="status-badge {{ s }}"><span class="sdot"></span>
+      {%- if s == 'pending' %}Queued
+      {%- elif s == 'running' %}Running
+      {%- elif s == 'done' %}Done
+      {%- elif s == 'rejected' %}Rejected
+      {%- else %}Failed{% endif -%}
+    </span>
+
+    <h1>{{ req.hf_repo }}</h1>
+    <div class="repo mono">benchmark: {{ req.task }}</div>
+
+    {% if s == 'pending' %}
+      <p>Your request is in the queue. As soon as a GPU picks it up we'll run
+        <b>{{ req.hf_repo }}</b> against its full-precision baseline and email
+        <b>{{ req.contact_email }}</b> a link to the results. This page updates itself.</p>
+    {% elif s == 'running' %}
+      <p>We're benchmarking <b>{{ req.hf_repo }}</b> right now — this takes a few
+        minutes. We'll email <b>{{ req.contact_email }}</b> when it's ready; this
+        page updates itself too.</p>
+    {% elif s == 'done' %}
+      <p>Your results are ready.</p>
+      <a class="cta" href="{{ url_for('model_page', hf_repo=req.result_hf_repo or req.hf_repo) }}">
+        View the comparison &rarr;</a>
+    {% elif s == 'rejected' %}
+      <p>We couldn't accept this request: {{ req.error or 'it did not pass our pre-run checks.' }}</p>
+    {% else %}
+      <p>We couldn't finish this benchmark: {{ req.error or 'the run failed.' }}
+        {% if req.contact_email %}We emailed <b>{{ req.contact_email }}</b> with the details.{% endif %}</p>
+    {% endif %}
+  </div>
+{% endblock %}

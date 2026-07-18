@@ -12,13 +12,23 @@ then open http://127.0.0.1:5001
 
 Read-only: it never writes to the database.
 """
+import os
 from collections import defaultdict
 
-from flask import Flask, render_template, abort
+from flask import Flask, render_template, abort, request, redirect, url_for, flash
 
 import storage
+import intake
 
 app = Flask(__name__)
+# Needed to show flash() messages (e.g. a rejected request). Set FLASK_SECRET_KEY
+# in the Vercel env; the dev fallback is fine locally but not for production.
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-only-insecure-key")
+
+# Rate limits for on-demand requests (design doc §6.4). Every accepted request is
+# a potential GPU run, so cap how many one person can trigger.
+MAX_REQUESTS_PER_IP_PER_HOUR = 3
+MAX_REQUESTS_PER_EMAIL_PER_DAY = 5
 
 # Lowest number = "most full precision"; used to order rows and pick a baseline.
 PRECISION_ORDER = {"fp32": 0, "fp16": 1, "int8": 2, "int4": 3}
@@ -361,6 +371,66 @@ def model_page(hf_repo):
     if data is None:
         abort(404)
     return render_template("compare.html", data=data)
+
+
+@app.route("/request", methods=["POST"])
+def request_benchmark():
+    """
+    Accept an on-demand benchmark request (design doc §1, steps 1-3). This is the
+    only *write* path in the web app, and it never runs a benchmark itself — it
+    validates cheaply, then drops a job on the queue for the GPU worker to pick up.
+
+    Order matters: reject junk before spending anything, cheapest checks first.
+    """
+    hf_repo = (request.form.get("hf_repo") or "").strip()
+    email = (request.form.get("email") or "").strip()
+    task = (request.form.get("task") or "hellaswag").strip()
+
+    if not hf_repo or not email:
+        flash("Please enter both a Hugging Face model id and an email.", "error")
+        return redirect(url_for("index"))
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        flash("That doesn't look like a valid email address.", "error")
+        return redirect(url_for("index"))
+
+    # 1. Do we already have it? Skip the queue and the GPU entirely.
+    if storage.has_results(hf_repo, task):
+        return redirect(url_for("model_page", hf_repo=hf_repo))
+
+    # 2. Rate limits (cheap DB counts, before any Hub call or GPU spend).
+    #    On Vercel the real client IP is in X-Forwarded-For, not remote_addr.
+    ip = (request.headers.get("X-Forwarded-For", request.remote_addr) or "").split(",")[0].strip()
+    if ip and storage.count_recent_requests(requester_ip=ip, since_hours=1) >= MAX_REQUESTS_PER_IP_PER_HOUR:
+        flash("You've made a few requests recently — please try again in a little while.", "error")
+        return redirect(url_for("index"))
+    if storage.count_recent_requests(contact_email=email, since_hours=24) >= MAX_REQUESTS_PER_EMAIL_PER_DAY:
+        flash("That email has reached its daily request limit. Try again tomorrow.", "error")
+        return redirect(url_for("index"))
+
+    # 3. Validate existence + size on the Hub (free, still pre-queue).
+    try:
+        param_count = intake.validate_request(hf_repo)
+    except intake.IntakeError as e:
+        flash(str(e), "error")
+        return redirect(url_for("index"))
+
+    # 4. Enqueue. Dedup is DB-enforced: a second in-flight request for the same
+    #    (model, task) returns the existing token instead of a second GPU run.
+    token = storage.enqueue_request(
+        hf_repo, task, contact_email=email,
+        param_count=param_count, requester_ip=ip or None,
+    )
+    return redirect(url_for("request_status", token=token))
+
+
+@app.route("/request/<token>")
+def request_status(token):
+    """Status page for a queued request (design doc §4). Polls itself while the
+    job is pending/running, and links to the results once done."""
+    req = storage.get_request_by_token(token)
+    if req is None:
+        abort(404)
+    return render_template("request_status.html", req=req)
 
 
 if __name__ == "__main__":

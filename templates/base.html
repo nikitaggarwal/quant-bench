@@ -139,6 +139,55 @@
       color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-2);
       padding: .2rem .45rem; border-radius: 6px; white-space: nowrap;
     }
+    .request { flex-wrap: wrap; }
+    .request .req-email {
+      flex: 0 1 15ch; min-width: 12ch; border-left: 1px solid var(--border-2);
+      padding-left: .7rem;
+    }
+    .request-note { margin: -1.2rem 0 2rem; font-size: .82rem; max-width: 640px; }
+
+    /* flash messages (request accepted / rejected) */
+    .flash {
+      max-width: 640px; margin: 1.4rem 0 -.4rem; padding: .6rem .9rem;
+      border-radius: 10px; font-size: .9rem; border: 1px solid var(--border-2);
+    }
+    .flash-error { color: var(--bad); background: var(--bad-bg);
+                   border-color: color-mix(in srgb, var(--bad) 25%, transparent); }
+    .flash-success { color: var(--good); background: var(--good-bg);
+                     border-color: color-mix(in srgb, var(--good) 25%, transparent); }
+
+    /* ---------- request status page ---------- */
+    .status-card {
+      border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow);
+      background: var(--bg); padding: 1.6rem 1.5rem; max-width: 640px; margin-top: 1rem;
+    }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem;
+      font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+      padding: .22rem .6rem; border-radius: 999px; border: 1px solid var(--border-2);
+      background: var(--surface-2); color: var(--fg-soft);
+    }
+    .status-badge .sdot { width: .5rem; height: .5rem; border-radius: 999px;
+                          background: var(--muted); }
+    .status-badge.running .sdot { background: var(--accent);
+                                  animation: pulse 1.2s ease-in-out infinite; }
+    .status-badge.done { background: var(--good-bg); color: var(--good);
+                         border-color: color-mix(in srgb, var(--good) 25%, transparent); }
+    .status-badge.done .sdot { background: var(--good); }
+    .status-badge.failed, .status-badge.rejected {
+      background: var(--bad-bg); color: var(--bad);
+      border-color: color-mix(in srgb, var(--bad) 25%, transparent); }
+    .status-badge.failed .sdot, .status-badge.rejected .sdot { background: var(--bad); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    .status-card h1 { font-size: 1.4rem; margin: .9rem 0 .3rem; }
+    .status-card .repo { font-size: .85rem; color: var(--faint); }
+    .status-card p { color: var(--muted); margin: .8rem 0 0; }
+    .status-card .cta {
+      display: inline-block; margin-top: 1.1rem; background: var(--accent);
+      color: var(--accent-fg); font-weight: 600; font-size: .9rem;
+      padding: .55rem 1.1rem; border-radius: 9px;
+    }
+    .status-card .cta:hover { filter: brightness(1.05); text-decoration: none; }
 
     /* ---------- tabs / pills ---------- */
     .tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
