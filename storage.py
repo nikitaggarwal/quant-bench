@@ -9,6 +9,7 @@ Connection string comes from the DATABASE_URL env var, or a DATABASE_URL= line
 in a local .env file (never commit that file — it holds your password).
 """
 import os
+import secrets
 
 import psycopg2
 
@@ -210,6 +211,177 @@ def has_results(model_id: str, benchmark: str) -> bool:
                 (model_id, benchmark),
             )
             return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Job queue for on-demand live benchmarking (see docs/live-benchmarking-design.md).
+# These operate purely on the bench_requests table — the *request lifecycle* — and
+# never touch the results tables. save_run() above is still the only path results
+# take into the database.
+# ---------------------------------------------------------------------------
+
+def enqueue_request(hf_repo: str, task: str = "hellaswag", *,
+                    contact_email: str | None = None,
+                    contact_phone: str | None = None,
+                    precision: str | None = None,
+                    param_count: int | None = None,
+                    requester_ip: str | None = None) -> str:
+    """
+    Add a benchmark request to the queue and return its public token (the id used
+    in a status/results URL).
+
+    Dedup: if a request for this same (hf_repo, task) is already pending or running,
+    no new row is created and the existing token is returned instead. The database
+    enforces this via the uniq_bench_requests_inflight partial index, so two people
+    asking for the same model at once can't spawn two GPU runs.
+    """
+    token = secrets.token_urlsafe(16)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bench_requests
+                    (hf_repo, task, precision, contact_email, contact_phone,
+                     param_count, requester_ip, public_token, result_hf_repo)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (hf_repo, task) WHERE status IN ('pending','running')
+                DO NOTHING
+                RETURNING public_token
+                """,
+                (hf_repo, task, precision, contact_email, contact_phone,
+                 param_count, requester_ip, token, hf_repo),
+            )
+            row = cur.fetchone()
+            if row is None:
+                # Dedup hit: an in-flight request already exists — return its token.
+                cur.execute(
+                    """
+                    SELECT public_token FROM bench_requests
+                    WHERE hf_repo = %s AND task = %s
+                      AND status IN ('pending','running')
+                    ORDER BY created_at
+                    LIMIT 1
+                    """,
+                    (hf_repo, task),
+                )
+                row = cur.fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return row[0] if row else token
+
+
+def claim_next_request() -> dict | None:
+    """
+    Atomically claim the oldest pending request for a worker to run, flipping it to
+    'running' and bumping its attempt count. Returns the claimed row as a dict, or
+    None if the queue is empty.
+
+    Uses FOR UPDATE SKIP LOCKED so several workers can poll at once and never grab
+    the same job — the standard 'Postgres-as-a-queue' primitive.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bench_requests
+                SET status = 'running', started_at = now(), attempts = attempts + 1
+                WHERE id = (
+                    SELECT id FROM bench_requests
+                    WHERE status = 'pending'
+                    ORDER BY created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                RETURNING *
+                """
+            )
+            row = cur.fetchone()
+            cols = [d[0] for d in cur.description] if row else None
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(zip(cols, row)) if row else None
+
+
+def mark_request(request_id: int, status: str, *, error: str | None = None,
+                 notified: bool = False):
+    """
+    Transition a request to a new lifecycle status ('running'/'done'/'failed'/
+    'rejected'). Stamps finished_at for terminal states and notified_at when the
+    contact has just been notified.
+    """
+    terminal = status in ("done", "failed", "rejected")
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bench_requests
+                SET status = %s,
+                    error = %s,
+                    finished_at = CASE WHEN %s THEN now() ELSE finished_at END,
+                    notified_at = CASE WHEN %s THEN now() ELSE notified_at END
+                WHERE id = %s
+                """,
+                (status, error, terminal, notified, request_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_request_by_token(token: str) -> dict | None:
+    """Look up a single request by its public token — powers the status page."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM bench_requests WHERE public_token = %s", (token,)
+            )
+            row = cur.fetchone()
+            cols = [d[0] for d in cur.description] if row else None
+    finally:
+        conn.close()
+    return dict(zip(cols, row)) if row else None
+
+
+def count_recent_requests(*, requester_ip: str | None = None,
+                          contact_email: str | None = None,
+                          contact_phone: str | None = None,
+                          since_hours: int = 24) -> int:
+    """
+    Count how many requests a given IP / email / phone made in the last
+    `since_hours` hours. Powers the rate limits in the design doc's §6. Pass exactly
+    one of requester_ip / contact_email / contact_phone.
+    """
+    if requester_ip is not None:
+        col, val = "requester_ip", requester_ip
+    elif contact_email is not None:
+        col, val = "contact_email", contact_email
+    elif contact_phone is not None:
+        col, val = "contact_phone", contact_phone
+    else:
+        raise ValueError(
+            "Pass exactly one of requester_ip, contact_email, or contact_phone."
+        )
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # `col` is one of three fixed literals above, never user input.
+            cur.execute(
+                f"""
+                SELECT COUNT(*) FROM bench_requests
+                WHERE {col} = %s
+                  AND created_at > now() - make_interval(hours => %s)
+                """,
+                (val, since_hours),
+            )
+            return cur.fetchone()[0]
     finally:
         conn.close()
 
