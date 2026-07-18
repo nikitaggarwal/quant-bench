@@ -20,6 +20,8 @@ from flask import Flask, render_template, abort, request, redirect, url_for, fla
 import storage
 import intake
 
+storage.load_env()  # pull secrets from .env into the environment for local runs
+
 app = Flask(__name__)
 # Needed to show flash() messages (e.g. a rejected request). Set FLASK_SECRET_KEY
 # in the Vercel env; the dev fallback is fine locally but not for production.

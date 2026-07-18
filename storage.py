@@ -17,6 +17,27 @@ from results import RunResult
 from metadata import model_meta, quant_meta
 
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "quant_bench_schema.sql")
+ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+
+
+def load_env(path: str = ENV_PATH):
+    """
+    Load KEY=VALUE lines from the .env file into os.environ, so local runs can
+    keep secrets (DATABASE_URL, RESEND_API_KEY, ...) in one git-ignored file.
+
+    Real environment variables win: we only fill in keys that aren't already set,
+    so production (Vercel/Modal env vars) always takes precedence over .env.
+    """
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+    except FileNotFoundError:
+        pass
 
 
 def _load_dsn() -> str:

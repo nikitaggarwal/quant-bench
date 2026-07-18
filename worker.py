@@ -27,6 +27,8 @@ import storage
 import notify
 from benchmark import run_comparison
 
+storage.load_env()  # pull secrets (RESEND_API_KEY, ...) from .env for local runs
+
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "10"))
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
 _limit_env = os.environ.get("BENCH_LIMIT")

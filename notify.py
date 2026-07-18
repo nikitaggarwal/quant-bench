@@ -56,6 +56,10 @@ def send_email(to: str, subject: str, html: str) -> bool:
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Resend sits behind Cloudflare, which blocks the default
+            # "Python-urllib/x.y" agent (403, Cloudflare error 1010). Send a
+            # plain identifying agent so the request goes through.
+            "User-Agent": "quant-bench/1.0",
         },
         method="POST",
     )
