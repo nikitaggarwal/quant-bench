@@ -14,8 +14,10 @@ Read-only: it never writes to the database.
 """
 import os
 from collections import defaultdict
+from datetime import date, datetime
+from decimal import Decimal
 
-from flask import Flask, render_template, abort, request, redirect, url_for, flash
+from flask import Flask, render_template, abort, request, redirect, url_for, flash, jsonify
 
 import storage
 import intake
@@ -77,12 +79,28 @@ def _task_meta(task: str) -> dict:
     })
 
 
-def _fetch_all() -> list[dict]:
-    """Every row of the benchmark_results view, as a list of dicts."""
+def _fetch_all(hf_repo: str | None = None, task: str | None = None) -> list[dict]:
+    """Rows of the benchmark_results view, as a list of dicts.
+
+    With no arguments this is the whole view (what the leaderboard pages want).
+    hf_repo/task narrow it in SQL rather than in Python, so the API's filtered
+    reads don't pull the full dataset into memory on every request.
+    """
+    sql = "SELECT * FROM benchmark_results"
+    clauses, params = [], []
+    if hf_repo:
+        clauses.append("hf_repo = %s")
+        params.append(hf_repo)
+    if task:
+        clauses.append("task = %s")
+        params.append(task)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+
     conn = storage.get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM benchmark_results")
+            cur.execute(sql, params)
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
@@ -433,6 +451,44 @@ def request_status(token):
     if req is None:
         abort(404)
     return render_template("request_status.html", req=req)
+
+
+def _json_safe(value):
+    """Coerce Postgres types (Decimal, date/datetime) into JSON-serialisable ones.
+
+    psycopg returns numeric columns as Decimal and timestamps as datetime, neither
+    of which Flask's default JSON encoder handles — so normalise them here.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+def _row_to_json(row: dict) -> dict:
+    return {k: _json_safe(v) for k, v in row.items()}
+
+
+@app.route("/api/results.json")
+def api_results():
+    """Read-only JSON dump of every benchmark result row.
+
+    Optional query params filter the set: ?model=<hf_repo> and/or ?task=<task>.
+    Mirrors what the leaderboard shows, for programmatic access (README roadmap:
+    "API layer").
+    """
+    model = (request.args.get("model") or "").strip()
+    task = (request.args.get("task") or "").strip()
+    rows = _fetch_all(hf_repo=model or None, task=task or None)
+    return jsonify({"count": len(rows), "results": [_row_to_json(r) for r in rows]})
+
+
+@app.route("/api/models.json")
+def api_models():
+    """Read-only JSON list of models that have results, with the tasks each has run."""
+    models = list_models()
+    return jsonify({"count": len(models), "models": models})
 
 
 if __name__ == "__main__":
