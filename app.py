@@ -79,12 +79,28 @@ def _task_meta(task: str) -> dict:
     })
 
 
-def _fetch_all() -> list[dict]:
-    """Every row of the benchmark_results view, as a list of dicts."""
+def _fetch_all(hf_repo: str | None = None, task: str | None = None) -> list[dict]:
+    """Rows of the benchmark_results view, as a list of dicts.
+
+    With no arguments this is the whole view (what the leaderboard pages want).
+    hf_repo/task narrow it in SQL rather than in Python, so the API's filtered
+    reads don't pull the full dataset into memory on every request.
+    """
+    sql = "SELECT * FROM benchmark_results"
+    clauses, params = [], []
+    if hf_repo:
+        clauses.append("hf_repo = %s")
+        params.append(hf_repo)
+    if task:
+        clauses.append("task = %s")
+        params.append(task)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+
     conn = storage.get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM benchmark_results")
+            cur.execute(sql, params)
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
@@ -464,11 +480,7 @@ def api_results():
     """
     model = (request.args.get("model") or "").strip()
     task = (request.args.get("task") or "").strip()
-    rows = _fetch_all()
-    if model:
-        rows = [r for r in rows if r.get("hf_repo") == model]
-    if task:
-        rows = [r for r in rows if r.get("task") == task]
+    rows = _fetch_all(hf_repo=model or None, task=task or None)
     return jsonify({"count": len(rows), "results": [_row_to_json(r) for r in rows]})
 
 
